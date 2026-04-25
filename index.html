@@ -230,6 +230,35 @@
             `).join('') : '<p class="text-center py-10 text-gray-500 italic">No hay registros de pagos realizados aún.</p>';
         };
 
+        // --- FUNCIÓN DE RESPALDO POR EMAIL ---
+        window.enviarRespaldoEmail = () => {
+            const historial = appData.historialPagos || [];
+            if (historial.length === 0) {
+                alert("No hay historial de pagos para respaldar.");
+                return;
+            }
+
+            let cuerpo = "REPORTE DE NOMINA REBORN - RESPALDO DE PAGOS\n";
+            cuerpo += "===========================================\n\n";
+            
+            historial.slice().reverse().forEach(p => {
+                const fecha = new Date(p.fechaPago).toLocaleString('es-ES');
+                cuerpo += `FECHA: ${fecha}\n`;
+                cuerpo += `TRABAJADOR: ${p.nombre.toUpperCase()}\n`;
+                cuerpo += `MONTO: $${p.monto.toFixed(2)}\n`;
+                cuerpo += `CONCEPTOS: ${p.detalles}\n`;
+                cuerpo += `-------------------------------------------\n`;
+            });
+
+            cuerpo += `\nGenerado automáticamente por Nómina Reborn el ${new Date().toLocaleString()}`;
+
+            const subject = encodeURIComponent("Respaldo de Nómina Reborn - Historial de Pagos");
+            const body = encodeURIComponent(cuerpo);
+            
+            // Abre el cliente de correo predeterminado
+            window.location.href = `mailto:?subject=${subject}&body=${body}`;
+        };
+
         function actualizarUI() {
             const tInv = appData.trabajos.reduce((acc, t) => acc + t.valor, 0);
             const tCob = appData.misTareas.reduce((acc, t) => acc + t.monto, 0);
@@ -347,6 +376,7 @@
         .osrs-card::after { content: ""; position: absolute; inset: 1px; border: 1px solid var(--osrs-border); pointer-events: none; }
         .btn-osrs { background: linear-gradient(to bottom, #4a4235, #2a241e); border: 1px solid var(--osrs-gold); color: var(--osrs-gold); cursor: pointer; transition: all 0.2s; }
         .btn-danger { background: linear-gradient(to bottom, #7f1d1d, #450a0a); border: 1px solid #ef4444; color: #f87171; }
+        .btn-success { background: linear-gradient(to bottom, #065f46, #064e3b); border: 1px solid #10b981; color: #d1fae5; }
         .tab-active { background: var(--osrs-gold) !important; color: #1a1714 !important; }
         input, select { background: #2a241e !important; border: 1px solid var(--osrs-border) !important; color: white !important; padding: 12px; border-radius: 4px; width: 100%; }
         .text-detail { font-size: 0.7rem; letter-spacing: 0.1em; }
@@ -419,7 +449,7 @@
                 </div>
             </section>
 
-            <!-- SECCIÓN REGISTRAR MIS TRABAJOS (Antes Mis Ganancias) -->
+            <!-- SECCIÓN REGISTRAR MIS TRABAJOS -->
             <section id="tab-mianalisis" class="hidden space-y-4">
                 <div class="osrs-card p-6">
                     <h3 class="text-yellow-500 uppercase text-xs mb-4 font-bold">Registrar Cobro de Mis Trabajos</h3>
@@ -496,7 +526,13 @@
             <!-- SECCIÓN HISTORIAL DE PAGOS REALIZADOS -->
             <section id="tab-historial-nominas" class="hidden space-y-4">
                 <div class="osrs-card p-6">
-                    <h3 class="text-yellow-500 uppercase text-xs mb-4 font-bold tracking-widest">Historial Detallado de Pagos a Trabajadores</h3>
+                    <div class="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 mb-6">
+                        <h3 class="text-yellow-500 uppercase text-xs font-bold tracking-widest">Historial Detallado de Pagos</h3>
+                        <button onclick="enviarRespaldoEmail()" class="btn-success px-4 py-2 rounded text-[10px] uppercase font-bold flex items-center gap-2">
+                            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z"></path></svg>
+                            Enviar Respaldo al Correo
+                        </button>
+                    </div>
                     <div id="lista-historial-nominas" class="space-y-3">
                     </div>
                 </div>
