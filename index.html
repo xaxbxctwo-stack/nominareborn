@@ -24,7 +24,7 @@
 
         // Estado de la aplicación
         let db, auth;
-        let appData = { empleados: [], trabajos: [], misTareas: [] };
+        let appData = { empleados: [], trabajos: [], misTareas: [], historialPagos: [] };
         let user = null;
         let mainChart = null;
         let monthlyChart = null;
@@ -57,11 +57,13 @@
             onSnapshot(dataDocRef, (docSnap) => {
                 if (docSnap.exists()) {
                     appData = docSnap.data();
+                    if (!appData.historialPagos) appData.historialPagos = [];
                 } else {
                     appData = { 
                         empleados: [{id: 1, nombre: "Jose"}, {id: 2, nombre: "Monky"}, {id: 3, nombre: "Polar"}], 
                         trabajos: [], 
-                        misTareas: [] 
+                        misTareas: [],
+                        historialPagos: []
                     };
                     saveToCloud();
                 }
@@ -106,6 +108,7 @@
             document.getElementById('btn-'+id).classList.add('tab-active');
             if (id === 'resumen') renderCharts();
             if (id === 'mistareas-historial') filtrarTareasPorMes();
+            if (id === 'historial-nominas') renderHistorialNominas();
         };
 
         window.agregarEmpleado = async () => {
@@ -120,6 +123,7 @@
             if(confirm("¿Eliminar trabajador y sus registros?")) {
                 appData.empleados = appData.empleados.filter(e => e.id !== id);
                 appData.trabajos = appData.trabajos.filter(t => t.empId !== id);
+                appData.historialPagos = appData.historialPagos.filter(p => p.empId !== id);
                 await saveToCloud();
             }
         };
@@ -160,12 +164,29 @@
         };
 
         window.marcarPagado = async (id) => {
+            const trabajosPendientes = appData.trabajos.filter(t => t.empId === id && !t.pagado);
+            if (trabajosPendientes.length === 0) return;
+
+            const totalPagado = trabajosPendientes.reduce((acc, t) => acc + t.valor, 0);
+            const nombreEmp = appData.empleados.find(e => e.id === id)?.nombre || "Desconocido";
+
             appData.trabajos = appData.trabajos.map(t => t.empId === id ? {...t, pagado: true} : t);
+
+            appData.historialPagos.push({
+                id: Date.now(),
+                empId: id,
+                nombre: nombreEmp,
+                monto: totalPagado,
+                fechaPago: new Date().toISOString(),
+                detalles: trabajosPendientes.map(t => t.descripcion).join(', ')
+            });
+
             await saveToCloud();
+            alert(`Pago registrado para ${nombreEmp} por $${totalPagado.toFixed(2)}`);
         };
 
         window.filtrarTareasPorMes = () => {
-            const mesSel = document.getElementById('filtro-mes-tareas').value; // Formato "YYYY-MM"
+            const mesSel = document.getElementById('filtro-mes-tareas').value; 
             const contenedor = document.getElementById('historial-tareas-mes');
             const totalMesElem = document.getElementById('total-monto-mes');
 
@@ -177,7 +198,7 @@
             const total = filtradas.reduce((acc, t) => acc + t.monto, 0);
             totalMesElem.innerText = `$${total.toFixed(2)}`;
 
-            contenedor.innerHTML = filtradas.length ? filtradas.reverse().map(t => `
+            contenedor.innerHTML = filtradas.length ? filtradas.slice().reverse().map(t => `
                 <div class="osrs-card p-4 flex justify-between items-center bg-black/20 mb-2">
                     <div>
                         <p class="text-white font-bold">${t.descripcion}</p>
@@ -185,7 +206,28 @@
                     </div>
                     <p class="text-green-500 font-bold">$${t.monto.toFixed(2)}</p>
                 </div>
-            `).join('') : '<p class="text-center py-8 text-gray-500 italic">No hay tareas en este periodo</p>';
+            `).join('') : '<p class="text-center py-8 text-gray-500 italic">No hay registros en este periodo</p>';
+        };
+
+        window.renderHistorialNominas = () => {
+            const contenedor = document.getElementById('lista-historial-nominas');
+            if (!contenedor) return;
+            const historial = appData.historialPagos || [];
+            contenedor.innerHTML = historial.length ? historial.slice().reverse().map(p => `
+                <div class="osrs-card p-4 border-l-4 border-yellow-500 bg-black/10 mb-3">
+                    <div class="flex justify-between items-start">
+                        <div>
+                            <h4 class="text-white font-bold uppercase text-sm">${p.nombre}</h4>
+                            <p class="text-[10px] text-gray-400 mb-2">${new Date(p.fechaPago).toLocaleString('es-ES')}</p>
+                            <p class="text-[11px] text-gray-300 italic">Conceptos: ${p.detalles}</p>
+                        </div>
+                        <div class="text-right">
+                            <p class="text-yellow-500 font-bold text-lg">$${p.monto.toFixed(2)}</p>
+                            <span class="text-[8px] bg-green-900/50 text-green-400 px-2 py-0.5 rounded border border-green-500">CONFIRMADO</span>
+                        </div>
+                    </div>
+                </div>
+            `).join('') : '<p class="text-center py-10 text-gray-500 italic">No hay registros de pagos realizados aún.</p>';
         };
 
         function actualizarUI() {
@@ -229,7 +271,7 @@
                                 <td class="p-4 font-bold text-white">${e.nombre}</td>
                                 <td class="p-4 text-yellow-500 font-bold">$${pendiente.toFixed(2)}</td>
                                 <td class="p-4 text-right">
-                                    <button onclick="marcarPagado(${e.id})" class="btn-osrs text-[10px] px-3 py-1 rounded">PAGAR</button>
+                                    <button onclick="marcarPagado(${e.id})" class="btn-osrs text-[10px] px-3 py-1 rounded">CONFIRMAR PAGO</button>
                                 </td>
                             </tr>`;
                     }
@@ -249,9 +291,11 @@
                 `).join('');
             }
             
-            // Actualizar historial si la pestaña está abierta
             if (!document.getElementById('tab-mistareas-historial').classList.contains('hidden')) {
                 filtrarTareasPorMes();
+            }
+            if (!document.getElementById('tab-historial-nominas').classList.contains('hidden')) {
+                renderHistorialNominas();
             }
         }
 
@@ -314,7 +358,6 @@
     <!-- LOGIN SCREEN -->
     <div id="login-screen" class="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/95">
         <div class="osrs-card w-full max-w-md p-8 text-center">
-            <!-- NOMBRE ACTUALIZADO AQUÍ -->
             <h2 class="text-2xl font-bold text-[#c2a352] mb-8 uppercase tracking-widest">Nómina Reborn</h2>
             <input type="password" id="login-pass" placeholder="PIN DE ACCESO" class="w-full p-4 rounded text-center mb-4 tracking-widest text-2xl font-bold">
             <button onclick="intentarLogin()" class="w-full btn-osrs py-4 uppercase font-bold tracking-widest">Verificar Sistema</button>
@@ -340,11 +383,12 @@
         <main class="max-w-6xl mx-auto p-4 space-y-6">
             <div class="flex bg-[#2a241e] border border-[#5d5447] p-1 rounded gap-1 overflow-x-auto no-scrollbar">
                 <button onclick="switchTab('resumen')" id="btn-resumen" class="flex-1 min-w-[110px] py-3 text-detail uppercase btn-osrs tab-active">Balances</button>
-                <button onclick="switchTab('mianalisis')" id="btn-mianalisis" class="flex-1 min-w-[110px] py-3 text-detail uppercase btn-osrs">Mis Ganancias</button>
+                <button onclick="switchTab('mianalisis')" id="btn-mianalisis" class="flex-1 min-w-[110px] py-3 text-detail uppercase btn-osrs">Mis Trabajos</button>
                 <button onclick="switchTab('mistareas-historial')" id="btn-mistareas-historial" class="flex-1 min-w-[110px] py-3 text-detail uppercase btn-osrs">Mis Tareas</button>
                 <button onclick="switchTab('trabajos')" id="btn-trabajos" class="flex-1 min-w-[110px] py-3 text-detail uppercase btn-osrs">Asignar Trabajo</button>
                 <button onclick="switchTab('empleados')" id="btn-empleados" class="flex-1 min-w-[110px] py-3 text-detail uppercase btn-osrs">Trabajadores</button>
-                <button onclick="switchTab('nomina')" id="btn-nomina" class="flex-1 min-w-[110px] py-3 text-detail uppercase btn-osrs">Pagos</button>
+                <button onclick="switchTab('nomina')" id="btn-nomina" class="flex-1 min-w-[110px] py-3 text-detail uppercase btn-osrs">Por Pagar</button>
+                <button onclick="switchTab('historial-nominas')" id="btn-historial-nominas" class="flex-1 min-w-[110px] py-3 text-detail uppercase btn-osrs">Historial Pagos</button>
             </div>
 
             <!-- SECCIÓN RESUMEN -->
@@ -375,18 +419,18 @@
                 </div>
             </section>
 
-            <!-- SECCIÓN REGISTRAR GANANCIAS -->
+            <!-- SECCIÓN REGISTRAR MIS TRABAJOS (Antes Mis Ganancias) -->
             <section id="tab-mianalisis" class="hidden space-y-4">
                 <div class="osrs-card p-6">
-                    <h3 class="text-yellow-500 uppercase text-xs mb-4 font-bold">Registrar Ganancia Propia</h3>
+                    <h3 class="text-yellow-500 uppercase text-xs mb-4 font-bold">Registrar Cobro de Mis Trabajos</h3>
                     <form onsubmit="registrarMiTarea(event)" class="space-y-4">
-                        <input type="text" id="mi-desc-tarea" placeholder="Descripción del cobro..." required>
+                        <input type="text" id="mi-desc-tarea" placeholder="Descripción del trabajo cobrado..." required>
                         <input type="number" id="mi-valor-tarea" step="0.01" placeholder="Monto Recibido $" required>
-                        <button type="submit" class="w-full btn-osrs py-4 font-bold uppercase">Guardar Cobro</button>
+                        <button type="submit" class="w-full btn-osrs py-4 font-bold uppercase">Guardar Registro</button>
                     </form>
                 </div>
                 <div class="space-y-2">
-                    <h3 class="text-detail uppercase text-gray-500 ml-2">Últimos Cobros</h3>
+                    <h3 class="text-detail uppercase text-gray-500 ml-2">Últimos Registros</h3>
                     <div id="lista-mis-tareas" class="space-y-2"></div>
                 </div>
             </section>
@@ -432,20 +476,29 @@
                 <div id="grid-empleados" class="grid grid-cols-1 sm:grid-cols-2 gap-3"></div>
             </section>
 
-            <!-- SECCIÓN PAGOS -->
+            <!-- SECCIÓN PAGOS PENDIENTES -->
             <section id="tab-nomina" class="hidden">
                 <div class="osrs-card overflow-x-auto">
                     <table class="w-full text-left min-w-[400px]">
                         <thead class="bg-black/40 text-[10px] uppercase text-yellow-600">
                             <tr>
                                 <th class="p-5">Trabajador</th>
-                                <th class="p-5">Pendiente de Pago</th>
+                                <th class="p-5">Monto Pendiente</th>
                                 <th class="p-5 text-right">Acción</th>
                             </tr>
                         </thead>
                         <tbody id="tabla-nomina-cuerpo" class="divide-y divide-[#5d5447]">
                         </tbody>
                     </table>
+                </div>
+            </section>
+
+            <!-- SECCIÓN HISTORIAL DE PAGOS REALIZADOS -->
+            <section id="tab-historial-nominas" class="hidden space-y-4">
+                <div class="osrs-card p-6">
+                    <h3 class="text-yellow-500 uppercase text-xs mb-4 font-bold tracking-widest">Historial Detallado de Pagos a Trabajadores</h3>
+                    <div id="lista-historial-nominas" class="space-y-3">
+                    </div>
                 </div>
             </section>
         </main>
