@@ -3,45 +3,44 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Nómina Pro - Cloud</title>
+    <title>Nómina de Trabajadores Reborn - Cloud</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     
     <script type="module">
         import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
-        import { getAuth, signInAnonymously, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        import { getAuth, signInAnonymously, onAuthStateChanged, signOut } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
         import { getFirestore, doc, setDoc, onSnapshot } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
 
-        // --- TU CONFIGURACIÓN DE FIREBASE ---
-        // Asegúrate de rellenar esto con los datos de tu consola de Firebase
+        // --- CONFIGURACIÓN DE FIREBASE ---
         const firebaseConfig = {
-            apiKey:  "AIzaSyANC4iGNEA435_WzIhZ_rDKXFxDAJKOlQk",
+            apiKey: "AIzaSyANC4iGNEA435_WzIhZ_rDKXFxDAJKOlQk",
             authDomain: "nominareborn-7b44d.firebaseapp.com",
             projectId: "nominareborn-7b44d",
-            storageBucket:"nominareborn-7b44d.firebasestorage.app",
+            storageBucket: "nominareborn-7b44d.firebasestorage.app",
             messagingSenderId: "1090828334810",
             appId: "1:1090828334810:web:5d853ea76a23894e4517e3"
         };
 
-        // Estado inicial
+        // Estado de la aplicación
         let db, auth;
         let appData = { empleados: [], trabajos: [], misTareas: [] };
         let user = null;
+        let mainChart = null;
+        let monthlyChart = null;
 
-        // Inicialización segura
+        // Inicialización
         try {
             const app = initializeApp(firebaseConfig);
             auth = getAuth(app);
             db = getFirestore(app);
-            console.log("Firebase inicializado correctamente");
         } catch (error) {
-            console.error("Error inicializando Firebase:", error);
-            alert("Error crítico: La configuración de Firebase es incorrecta. Revisa las líneas 22-29.");
+            console.error("Error Firebase:", error);
         }
 
         // Autenticación
         signInAnonymously(auth).catch(err => {
-            console.error("Error Auth:", err);
+            console.error("Auth Error:", err);
             document.getElementById('debug-msg').innerText = "Error: Activa 'Anonymous Auth' en Firebase";
         });
 
@@ -53,25 +52,23 @@
         });
 
         function setupDataSync() {
-            // Ruta fija para evitar errores de segmentos
             const dataDocRef = doc(db, 'nomina_data', 'global_state');
             
             onSnapshot(dataDocRef, (docSnap) => {
                 if (docSnap.exists()) {
                     appData = docSnap.data();
                 } else {
-                    // Datos iniciales si la base está vacía
                     appData = { 
-                        empleados: [{id: 1, nombre: "Trabajador 1"}], 
+                        empleados: [{id: 1, nombre: "Jose"}, {id: 2, nombre: "Monky"}, {id: 3, nombre: "Polar"}], 
                         trabajos: [], 
                         misTareas: [] 
                     };
                     saveToCloud();
                 }
                 actualizarUI();
+                if (!document.getElementById('tab-resumen').classList.contains('hidden')) renderCharts();
             }, (err) => {
-                console.error("Error Firestore:", err);
-                document.getElementById('debug-msg').innerText = "Error de Permisos: Pon Firestore en 'Modo Prueba'";
+                console.error("Firestore Error:", err);
             });
         }
 
@@ -81,20 +78,34 @@
             try {
                 await setDoc(dataDocRef, appData);
             } catch (e) {
-                console.error("Error al guardar:", e);
+                console.error("Error saving:", e);
             }
         }
 
-        // --- FUNCIONES GLOBALES ---
+        // --- LÓGICA DE INTERFAZ ---
         window.intentarLogin = () => {
-            const pin = document.getElementById('login-pass').value;
-            if (pin === "1234") {
+            if (document.getElementById('login-pass').value === "1234") {
                 document.getElementById('login-screen').classList.add('hidden');
                 document.getElementById('main-app').classList.remove('hidden');
-                actualizarUI();
+                document.getElementById('login-pass').value = '';
+                setTimeout(() => { actualizarUI(); renderCharts(); }, 100);
             } else {
                 alert("PIN incorrecto");
             }
+        };
+
+        window.cerrarSesion = () => {
+            document.getElementById('main-app').classList.add('hidden');
+            document.getElementById('login-screen').classList.remove('hidden');
+        };
+
+        window.switchTab = (id) => {
+            document.querySelectorAll('section').forEach(s => s.classList.add('hidden'));
+            document.getElementById('tab-'+id).classList.remove('hidden');
+            document.querySelectorAll('button[id^="btn-"]').forEach(b => b.classList.remove('tab-active'));
+            document.getElementById('btn-'+id).classList.add('tab-active');
+            if (id === 'resumen') renderCharts();
+            if (id === 'mistareas-historial') filtrarTareasPorMes();
         };
 
         window.agregarEmpleado = async () => {
@@ -105,97 +116,339 @@
             await saveToCloud();
         };
 
-        window.registrarTrabajo = async (e) => {
-            e.preventDefault();
-            const empId = parseInt(document.getElementById('sel-emp').value);
-            const val = parseFloat(document.getElementById('val-t').value);
-            const desc = document.getElementById('desc-t').value;
-            if(!empId || isNaN(val)) return;
+        window.eliminarEmpleado = async (id) => {
+            if(confirm("¿Eliminar trabajador y sus registros?")) {
+                appData.empleados = appData.empleados.filter(e => e.id !== id);
+                appData.trabajos = appData.trabajos.filter(t => t.empId !== id);
+                await saveToCloud();
+            }
+        };
 
-            appData.trabajos.push({
-                id: Date.now(),
-                empId,
-                valor: val,
-                descripcion: desc,
-                pagado: false
+        window.registrarTareaTrabajador = async (e) => {
+            e.preventDefault();
+            const empId = parseInt(document.getElementById('sel-empleado-trabajo').value);
+            const valor = parseFloat(document.getElementById('valor-trabajo').value);
+            const desc = document.getElementById('desc-trabajo').value;
+            if (!empId || isNaN(valor) || !desc) return;
+            
+            appData.trabajos.push({ 
+                id: Date.now(), 
+                empId, 
+                descripcion: desc, 
+                valor, 
+                fecha: new Date().toISOString(), 
+                pagado: false 
             });
             e.target.reset();
             await saveToCloud();
         };
 
-        function actualizarUI() {
-            // Renderizar lista de empleados
-            const grid = document.getElementById('grid-emp');
-            grid.innerHTML = appData.empleados.map(e => `
-                <div class="bg-gray-800 p-3 rounded border border-gray-700 flex justify-between">
-                    <span>${e.nombre}</span>
+        window.registrarMiTarea = async (e) => {
+            e.preventDefault();
+            const valor = parseFloat(document.getElementById('mi-valor-tarea').value);
+            const desc = document.getElementById('mi-desc-tarea').value;
+            if (isNaN(valor) || !desc) return;
+            
+            appData.misTareas.push({ 
+                id: Date.now(), 
+                descripcion: desc, 
+                monto: valor, 
+                fecha: new Date().toISOString() 
+            });
+            e.target.reset();
+            await saveToCloud();
+        };
+
+        window.marcarPagado = async (id) => {
+            appData.trabajos = appData.trabajos.map(t => t.empId === id ? {...t, pagado: true} : t);
+            await saveToCloud();
+        };
+
+        window.filtrarTareasPorMes = () => {
+            const mesSel = document.getElementById('filtro-mes-tareas').value; // Formato "YYYY-MM"
+            const contenedor = document.getElementById('historial-tareas-mes');
+            const totalMesElem = document.getElementById('total-monto-mes');
+
+            let filtradas = appData.misTareas;
+            if (mesSel) {
+                filtradas = appData.misTareas.filter(t => t.fecha.startsWith(mesSel));
+            }
+
+            const total = filtradas.reduce((acc, t) => acc + t.monto, 0);
+            totalMesElem.innerText = `$${total.toFixed(2)}`;
+
+            contenedor.innerHTML = filtradas.length ? filtradas.reverse().map(t => `
+                <div class="osrs-card p-4 flex justify-between items-center bg-black/20 mb-2">
+                    <div>
+                        <p class="text-white font-bold">${t.descripcion}</p>
+                        <p class="text-[10px] text-gray-400">${new Date(t.fecha).toLocaleDateString('es-ES', { day: '2-digit', month: 'long', year: 'numeric' })}</p>
+                    </div>
+                    <p class="text-green-500 font-bold">$${t.monto.toFixed(2)}</p>
                 </div>
-            `).join('');
+            `).join('') : '<p class="text-center py-8 text-gray-500 italic">No hay tareas en este periodo</p>';
+        };
 
-            // Selector de empleados
-            const sel = document.getElementById('sel-emp');
-            sel.innerHTML = '<option value="">Seleccionar...</option>' + 
-                appData.empleados.map(e => `<option value="${e.id}">${e.nombre}</option>`).join('');
+        function actualizarUI() {
+            const tInv = appData.trabajos.reduce((acc, t) => acc + t.valor, 0);
+            const tCob = appData.misTareas.reduce((acc, t) => acc + t.monto, 0);
+            const neta = tCob - tInv;
 
-            // Calcular totales
-            const total = appData.trabajos.reduce((acc, t) => acc + t.valor, 0);
-            document.getElementById('total-inv').innerText = `$${total.toFixed(2)}`;
+            document.getElementById('stat-inversion-total').innerText = `$${tInv.toFixed(2)}`;
+            document.getElementById('stat-ganancia-bruta').innerText = `$${tCob.toFixed(2)}`;
+            document.getElementById('stat-ganancia-neta').innerText = `$${neta.toFixed(2)}`;
+            document.getElementById('stat-ganancia-neta').className = `text-3xl font-bold ${neta >= 0 ? 'text-green-500' : 'text-red-500'}`;
+
+            const sel = document.getElementById('sel-empleado-trabajo');
+            if(sel) {
+                sel.innerHTML = '<option value="" disabled selected>Seleccionar Trabajador</option>' + 
+                    appData.empleados.map(e => `<option value="${e.id}">${e.nombre}</option>`).join('');
+            }
+
+            const grid = document.getElementById('grid-empleados');
+            if(grid) {
+                grid.innerHTML = appData.empleados.map(e => `
+                    <div class="osrs-card p-4 flex justify-between items-center">
+                        <span class="font-bold text-white">${e.nombre}</span>
+                        <button onclick="eliminarEmpleado(${e.id})" class="text-red-500 hover:scale-110 transition-transform">
+                            <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" /></svg>
+                        </button>
+                    </div>
+                `).join('');
+            }
+
+            const cuerpoNomina = document.getElementById('tabla-nomina-cuerpo');
+            if(cuerpoNomina) {
+                cuerpoNomina.innerHTML = '';
+                appData.empleados.forEach(e => {
+                    const pendiente = appData.trabajos
+                        .filter(t => t.empId === e.id && !t.pagado)
+                        .reduce((acc, t) => acc + t.valor, 0);
+                    if(pendiente > 0) {
+                        cuerpoNomina.innerHTML += `
+                            <tr class="hover:bg-black/20">
+                                <td class="p-4 font-bold text-white">${e.nombre}</td>
+                                <td class="p-4 text-yellow-500 font-bold">$${pendiente.toFixed(2)}</td>
+                                <td class="p-4 text-right">
+                                    <button onclick="marcarPagado(${e.id})" class="btn-osrs text-[10px] px-3 py-1 rounded">PAGAR</button>
+                                </td>
+                            </tr>`;
+                    }
+                });
+            }
+
+            const listaMisTareas = document.getElementById('lista-mis-tareas');
+            if(listaMisTareas) {
+                listaMisTareas.innerHTML = [...appData.misTareas].reverse().slice(0, 5).map(t => `
+                    <div class="osrs-card p-3 flex justify-between items-center bg-black/10">
+                        <div>
+                            <p class="text-white text-sm font-bold">${t.descripcion}</p>
+                            <p class="text-[10px] text-gray-500">${new Date(t.fecha).toLocaleDateString()}</p>
+                        </div>
+                        <p class="text-green-500 font-bold">+$${t.monto.toFixed(2)}</p>
+                    </div>
+                `).join('');
+            }
+            
+            // Actualizar historial si la pestaña está abierta
+            if (!document.getElementById('tab-mistareas-historial').classList.contains('hidden')) {
+                filtrarTareasPorMes();
+            }
         }
 
+        window.renderCharts = () => {
+            const ctx1 = document.getElementById('yieldChart');
+            if(ctx1) {
+                if(mainChart) mainChart.destroy();
+                mainChart = new Chart(ctx1, { 
+                    type: 'bar', 
+                    data: { 
+                        labels: appData.empleados.map(e => e.nombre), 
+                        datasets: [{ 
+                            data: appData.empleados.map(e => appData.trabajos.filter(t => t.empId === e.id).length), 
+                            backgroundColor: '#c2a352' 
+                        }] 
+                    }, 
+                    options: { maintainAspectRatio: false, plugins: { legend: { display: false } }, scales: { y: { beginAtZero: true, ticks: { color: '#888' } }, x: { ticks: { color: '#888' } } } } 
+                });
+            }
+            const ctx2 = document.getElementById('monthlyChart');
+            if(ctx2) {
+                const invMes = new Array(12).fill(0);
+                appData.trabajos.forEach(t => { invMes[new Date(t.fecha).getMonth()] += t.valor; });
+                if(monthlyChart) monthlyChart.destroy();
+                monthlyChart = new Chart(ctx2, { 
+                    type: 'line', 
+                    data: { 
+                        labels: ["Ene", "Feb", "Mar", "Abr", "May", "Jun", "Jul", "Ago", "Sep", "Oct", "Nov", "Dic"], 
+                        datasets: [{ 
+                            label: 'Inversión', 
+                            data: invMes, 
+                            borderColor: '#c2a352', 
+                            backgroundColor: 'rgba(194,163,82,0.1)', 
+                            fill: true 
+                        }] 
+                    }, 
+                    options: { maintainAspectRatio: false, scales: { y: { beginAtZero: true, ticks: { color: '#888' } }, x: { ticks: { color: '#888' } } } } 
+                });
+            }
+        };
     </script>
 
     <style>
-        body { background: #0f172a; color: #f8fafc; font-family: sans-serif; }
-        .card { background: #1e293b; border-radius: 8px; padding: 20px; border: 1px solid #334155; }
-        input, select { background: #0f172a; border: 1px solid #475569; padding: 10px; border-radius: 4px; color: white; width: 100%; }
-        button { background: #3b82f6; color: white; padding: 10px; border-radius: 4px; font-weight: bold; width: 100%; }
-        button:hover { background: #2563eb; }
+        @import url('https://fonts.googleapis.com/css2?family=Cinzel:wght@400;700&family=Inter:wght@300;400;600;700&display=swap');
+        :root { --osrs-panel: #3d352b; --osrs-gold: #c2a352; --osrs-border: #5d5447; }
+        body { font-family: 'Inter', sans-serif; background: #1a1714; color: #e1d1bc; overflow-x: hidden; }
+        h1, h2, h3 { font-family: 'Cinzel', serif; }
+        .osrs-card { background: var(--osrs-panel); border: 2px solid #2a241e; position: relative; box-shadow: inset 0 0 10px rgba(0,0,0,0.5); }
+        .osrs-card::after { content: ""; position: absolute; inset: 1px; border: 1px solid var(--osrs-border); pointer-events: none; }
+        .btn-osrs { background: linear-gradient(to bottom, #4a4235, #2a241e); border: 1px solid var(--osrs-gold); color: var(--osrs-gold); cursor: pointer; transition: all 0.2s; }
+        .btn-danger { background: linear-gradient(to bottom, #7f1d1d, #450a0a); border: 1px solid #ef4444; color: #f87171; }
+        .tab-active { background: var(--osrs-gold) !important; color: #1a1714 !important; }
+        input, select { background: #2a241e !important; border: 1px solid var(--osrs-border) !important; color: white !important; padding: 12px; border-radius: 4px; width: 100%; }
+        .text-detail { font-size: 0.7rem; letter-spacing: 0.1em; }
+        .no-scrollbar::-webkit-scrollbar { display: none; }
     </style>
 </head>
-<body class="p-4">
+<body class="pb-20">
 
-    <!-- LOGIN -->
-    <div id="login-screen" class="fixed inset-0 bg-slate-950 flex items-center justify-center p-6 z-50">
-        <div class="card w-full max-w-sm text-center">
-            <h1 class="text-2xl font-bold mb-6 text-blue-400 text-center">NÓMINA CLOUD</h1>
-            <input type="password" id="login-pass" placeholder="PIN de acceso" class="mb-4 text-center text-xl tracking-widest">
-            <button onclick="intentarLogin()">INGRESAR</button>
-            <p id="debug-msg" class="text-red-400 text-xs mt-4"></p>
+    <!-- LOGIN SCREEN -->
+    <div id="login-screen" class="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/95">
+        <div class="osrs-card w-full max-w-md p-8 text-center">
+            <!-- NOMBRE ACTUALIZADO AQUÍ -->
+            <h2 class="text-2xl font-bold text-[#c2a352] mb-8 uppercase tracking-widest">Nómina Reborn</h2>
+            <input type="password" id="login-pass" placeholder="PIN DE ACCESO" class="w-full p-4 rounded text-center mb-4 tracking-widest text-2xl font-bold">
+            <button onclick="intentarLogin()" class="w-full btn-osrs py-4 uppercase font-bold tracking-widest">Verificar Sistema</button>
+            <p id="debug-msg" class="text-red-500 text-[10px] mt-4 uppercase"></p>
         </div>
     </div>
 
-    <!-- APP -->
-    <div id="main-app" class="hidden max-w-2xl mx-auto space-y-6">
-        <header class="flex justify-between items-center py-4 border-b border-slate-700">
-            <h2 class="text-xl font-bold">Panel de Control</h2>
-            <span class="text-green-400 text-xs">● Nube Conectada</span>
-        </header>
-
-        <div class="grid grid-cols-1 gap-4">
-            <div class="card text-center">
-                <p class="text-gray-400 text-sm uppercase">Inversión Total</p>
-                <p id="total-inv" class="text-4xl font-bold text-blue-400">$0.00</p>
+    <!-- MAIN APP -->
+    <div id="main-app" class="hidden">
+        <nav class="bg-[#3d352b] border-b-2 border-[#c2a352] p-4 sticky top-0 z-50">
+            <div class="max-w-6xl mx-auto flex justify-between items-center">
+                <h1 class="font-bold uppercase text-sm md:text-lg text-yellow-500">Nómina <span class="text-white">Reborn</span></h1>
+                <div class="flex items-center gap-4">
+                    <div class="hidden sm:block text-[9px] text-green-500 uppercase tracking-[0.2em] font-bold">● Cloud Online</div>
+                    <button onclick="cerrarSesion()" class="btn-danger p-2 rounded flex items-center gap-2 text-[10px] uppercase font-bold">
+                        <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1" /></svg>
+                        Salir
+                    </button>
+                </div>
             </div>
-        </div>
+        </nav>
 
-        <div class="card">
-            <h3 class="text-blue-400 font-bold mb-4">Añadir Trabajador</h3>
-            <div class="flex gap-2">
-                <input type="text" id="nombre-empleado" placeholder="Nombre...">
-                <button onclick="agregarEmpleado()" class="w-auto px-6">Añadir</button>
+        <main class="max-w-6xl mx-auto p-4 space-y-6">
+            <div class="flex bg-[#2a241e] border border-[#5d5447] p-1 rounded gap-1 overflow-x-auto no-scrollbar">
+                <button onclick="switchTab('resumen')" id="btn-resumen" class="flex-1 min-w-[110px] py-3 text-detail uppercase btn-osrs tab-active">Balances</button>
+                <button onclick="switchTab('mianalisis')" id="btn-mianalisis" class="flex-1 min-w-[110px] py-3 text-detail uppercase btn-osrs">Mis Ganancias</button>
+                <button onclick="switchTab('mistareas-historial')" id="btn-mistareas-historial" class="flex-1 min-w-[110px] py-3 text-detail uppercase btn-osrs">Mis Tareas</button>
+                <button onclick="switchTab('trabajos')" id="btn-trabajos" class="flex-1 min-w-[110px] py-3 text-detail uppercase btn-osrs">Asignar Trabajo</button>
+                <button onclick="switchTab('empleados')" id="btn-empleados" class="flex-1 min-w-[110px] py-3 text-detail uppercase btn-osrs">Trabajadores</button>
+                <button onclick="switchTab('nomina')" id="btn-nomina" class="flex-1 min-w-[110px] py-3 text-detail uppercase btn-osrs">Pagos</button>
             </div>
-            <div id="grid-emp" class="grid grid-cols-2 gap-2 mt-4"></div>
-        </div>
 
-        <div class="card">
-            <h3 class="text-blue-400 font-bold mb-4">Registrar Tarea</h3>
-            <form onsubmit="registrarTrabajo(event)" class="space-y-3">
-                <select id="sel-emp" required></select>
-                <input type="text" id="desc-t" placeholder="Descripción" required>
-                <input type="number" id="val-t" step="0.01" placeholder="Monto $" required>
-                <button type="submit">Guardar Registro</button>
-            </form>
-        </div>
+            <!-- SECCIÓN RESUMEN -->
+            <section id="tab-resumen" class="space-y-6">
+                <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+                    <div class="osrs-card p-6 text-center">
+                        <p class="text-gray-400 text-detail uppercase mb-1">Inversión Equipo</p>
+                        <p id="stat-inversion-total" class="text-3xl font-bold text-yellow-500">$0.00</p>
+                    </div>
+                    <div class="osrs-card p-6 text-center">
+                        <p class="text-gray-400 text-detail uppercase mb-1">Cobros Brutos</p>
+                        <p id="stat-ganancia-bruta" class="text-3xl font-bold text-white">$0.00</p>
+                    </div>
+                    <div class="osrs-card p-6 text-center">
+                        <p class="text-gray-400 text-detail uppercase mb-1">Ganancia Neta</p>
+                        <p id="stat-ganancia-neta" class="text-3xl font-bold">$0.00</p>
+                    </div>
+                </div>
+                <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div class="osrs-card p-6 min-h-[300px]">
+                        <h3 class="text-xs uppercase text-yellow-600 mb-4 font-bold tracking-widest">Rendimiento</h3>
+                        <div class="h-64"><canvas id="yieldChart"></canvas></div>
+                    </div>
+                    <div class="osrs-card p-6 min-h-[300px]">
+                        <h3 class="text-xs uppercase text-yellow-600 mb-4 font-bold tracking-widest">Inversión Histórica</h3>
+                        <div class="h-64"><canvas id="monthlyChart"></canvas></div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- SECCIÓN REGISTRAR GANANCIAS -->
+            <section id="tab-mianalisis" class="hidden space-y-4">
+                <div class="osrs-card p-6">
+                    <h3 class="text-yellow-500 uppercase text-xs mb-4 font-bold">Registrar Ganancia Propia</h3>
+                    <form onsubmit="registrarMiTarea(event)" class="space-y-4">
+                        <input type="text" id="mi-desc-tarea" placeholder="Descripción del cobro..." required>
+                        <input type="number" id="mi-valor-tarea" step="0.01" placeholder="Monto Recibido $" required>
+                        <button type="submit" class="w-full btn-osrs py-4 font-bold uppercase">Guardar Cobro</button>
+                    </form>
+                </div>
+                <div class="space-y-2">
+                    <h3 class="text-detail uppercase text-gray-500 ml-2">Últimos Cobros</h3>
+                    <div id="lista-mis-tareas" class="space-y-2"></div>
+                </div>
+            </section>
+
+            <!-- SECCIÓN HISTORIAL DE MIS TAREAS -->
+            <section id="tab-mistareas-historial" class="hidden space-y-4">
+                <div class="osrs-card p-6">
+                    <h3 class="text-yellow-500 uppercase text-xs mb-4 font-bold">Historial de Tareas Aceptadas</h3>
+                    <div class="flex flex-col sm:flex-row gap-4 items-center justify-between mb-6">
+                        <div class="w-full sm:w-1/2">
+                            <label class="text-[10px] uppercase text-gray-400 block mb-2">Filtrar por Mes</label>
+                            <input type="month" id="filtro-mes-tareas" onchange="filtrarTareasPorMes()" class="w-full">
+                        </div>
+                        <div class="text-right">
+                            <p class="text-[10px] uppercase text-gray-400">Total en este periodo</p>
+                            <p id="total-monto-mes" class="text-2xl font-bold text-green-500">$0.00</p>
+                        </div>
+                    </div>
+                    <div id="historial-tareas-mes" class="min-h-[200px]">
+                    </div>
+                </div>
+            </section>
+
+            <!-- SECCIÓN ASIGNAR TRABAJO -->
+            <section id="tab-trabajos" class="hidden space-y-4">
+                <div class="osrs-card p-6">
+                    <h3 class="text-yellow-500 uppercase text-xs mb-4 font-bold">Nueva Tarea para un Trabajador</h3>
+                    <form onsubmit="registrarTareaTrabajador(event)" class="space-y-4">
+                        <select id="sel-empleado-trabajo" required></select>
+                        <input type="text" id="desc-trabajo" placeholder="¿Qué trabajo realizó?" required>
+                        <input type="number" id="valor-trabajo" step="0.01" placeholder="Pago Acordado $" required>
+                        <button type="submit" class="w-full btn-osrs py-4 font-bold uppercase">Registrar Tarea</button>
+                    </form>
+                </div>
+            </section>
+
+            <!-- SECCIÓN TRABAJADORES -->
+            <section id="tab-empleados" class="hidden space-y-4">
+                <div class="osrs-card p-6 flex gap-2">
+                    <input type="text" id="nombre-empleado" placeholder="Nombre del nuevo trabajador...">
+                    <button onclick="agregarEmpleado()" class="btn-osrs px-6 font-bold uppercase text-xs">Añadir</button>
+                </div>
+                <div id="grid-empleados" class="grid grid-cols-1 sm:grid-cols-2 gap-3"></div>
+            </section>
+
+            <!-- SECCIÓN PAGOS -->
+            <section id="tab-nomina" class="hidden">
+                <div class="osrs-card overflow-x-auto">
+                    <table class="w-full text-left min-w-[400px]">
+                        <thead class="bg-black/40 text-[10px] uppercase text-yellow-600">
+                            <tr>
+                                <th class="p-5">Trabajador</th>
+                                <th class="p-5">Pendiente de Pago</th>
+                                <th class="p-5 text-right">Acción</th>
+                            </tr>
+                        </thead>
+                        <tbody id="tabla-nomina-cuerpo" class="divide-y divide-[#5d5447]">
+                        </tbody>
+                    </table>
+                </div>
+            </section>
+        </main>
     </div>
 
 </body>
